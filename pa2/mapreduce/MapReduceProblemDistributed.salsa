@@ -1,0 +1,251 @@
+module mapreduce;
+
+import java.util.Vector;
+import java.io.*;
+import java.util.TreeMap;
+
+
+behavior MapReduceProblemDistributed {
+  MapReduce kernel; // containing the number of mappers, shufflers and reducers, and map and reduce methods
+  Map[] mapActors;
+  Shuffle[] shuffleActors;
+  Reduce[] reduceActors;
+  Vector theaters;
+
+  // constructor for MapReduceProblem, need to modify for distributed computation
+  public MapReduceProblemDistributed(MapReduce mr, Vector theatersVec) {
+    theaters = theatersVec;
+    String uan = (String) theaters.get(0);
+    kernel = mr;
+    mapActors = new Map[mr.nMappers()];
+    for (int i = 0; i < mapActors.length; ++i) {
+      int theaterIndex = i%(theaters.size()-1) + 1;
+      String ual = (String) theaters.get(theaterIndex);
+      mapActors[i] = new Map(mr) at (new UAN("uan://" + uan + "/m" + i), new UAL("rmsp://" + ual + "/m"+i));
+    }
+    shuffleActors = new Shuffle[mr.nShufflers()];
+    for (int i = 0; i < shuffleActors.length; ++i) {
+      int theaterIndex = i%(theaters.size()-1) + 1;
+      String ual = (String) theaters.get(theaterIndex);
+      shuffleActors[i] = new Shuffle(mr, i) at (new UAN("uan://" + uan + "/s" + i), new UAL("rmsp://" + ual + "/s"+i));
+    }
+    reduceActors = new Reduce[mr.nReducers()];
+    for (int i = 0; i < reduceActors.length; ++i) {
+      int theaterIndex = i%(theaters.size()-1) + 1;
+      String ual = (String) theaters.get(theaterIndex);
+      reduceActors[i] = new Reduce(mr) at (new UAN("uan://" + uan + "/r" + i), new UAL("rmsp://" + ual + "/r"+i));
+    }
+  }
+
+  // TODO: define the framework with functions of the kernel, define the Shuffle behavior, and distribute work among mappers, shufflers and reducers
+
+  // Helper function to join two vectors
+  Vector joinTwoVectors(Vector vec1, Vector vec2) {
+    if (vec1 == null) return vec2;
+    if (vec2 == null) return vec1;
+    Vector vec = new Vector();
+    for (int i = 0; i < vec1.size(); i++) {
+      vec.add(vec1.get(i));
+    }
+    for (int i = 0; i < vec2.size(); i++) {
+      vec.add(vec2.get(i));
+    }
+    return vec;
+  }
+
+  void printVectorOfPairs(Vector v) {
+    for (int i = 0; i < v.size(); i++) {
+        Pair p = (Pair) v.get(i);
+        p.print();
+    }
+  }
+
+
+  // I. Read from input file
+  Vector readInput(String inputFilename) {
+    PairReader pairReader = new PairReader(inputFilename);
+    Vector pairs = new Vector();
+    System.out.print("\nThe pairs read from the input file are:");
+    while (true) {
+      Pair p = pairReader.readPair();
+      if (p == null) {
+        break;
+      }
+      else {
+        pairs.add(p);
+        System.out.print("\n" + p.getString());
+      }
+    }
+    return pairs;
+  }
+
+  // II. Run the map actors
+
+  // Helper function; reference: https://github.com/nmcglohon/mapReduceCounting
+  Object[] theToken(Object[] obj) {
+    return obj;
+  }
+
+  Object[] runMapActors(Vector pairs) {
+    join {
+      for (int i = 0; i < pairs.size(); i++) {
+        int mapActorIndex = i%kernel.nMappers();
+        mapActors[mapActorIndex]<-map((Pair) pairs.get(i));
+      }
+    }@theToken(token)@currentContinuation;
+  }
+
+
+  // III. Shuffle
+
+  //Helper function
+  int min(int a, int b) {
+    if (a < b) return a;
+    else return b;
+  }
+
+
+  public void printDocFreqPair(Pair p) {
+    String word = (String) p.key;
+    Pair docFreqPair = (Pair) p.value;
+    System.out.print("(" + word + ", (" + docFreqPair.key + ", " + docFreqPair.value + "))");
+  }
+
+  Object[] runShuffleActors(Object[] objects) {
+
+    // (0) print the results of last step.
+
+    System.out.print("\nThe map process gives an array of size " + objects.length + "; each element is a vector of pairs:");
+    for (int i = 0; i < objects.length; i++) {
+      System.out.print("\nVector of pairs " + i + ":");
+      Vector v = (Vector) objects[i];
+
+      for (int j = 0; j < v.size(); j++) {
+        Pair p = (Pair) v.get(j);
+        System.out.print(" ");
+        p.printDocFreqPair();
+      }
+    }
+
+    // (1) Regroup vectors to be sent to the shufflers.
+
+    Vector[] shufflerInputs = new Vector[kernel.nShufflers()];
+    for (int i = 0; i < objects.length; i++){
+      int shuffleActorIndex=i%kernel.nShufflers();
+      shufflerInputs[shuffleActorIndex] = joinTwoVectors(shufflerInputs[shuffleActorIndex],(Vector)objects[i]);
+    }
+
+    // (2) Sent to shufflers to shuffle
+    join {
+      for (int i = 0; i < min(kernel.nShufflers(), objects.length); i++) {
+        shuffleActors[i]<-shuffle(shufflerInputs[i]);
+      }
+    }@theToken(token)@currentContinuation;
+  }
+
+
+  TreeMap aggregateShuffleResults(Object[] objects) {
+
+    // (0) print results of previous step: runShuffleActors
+    System.out.print("\nThe results from the shufflers are:");
+    for (int i = 0; i < objects.length; i++) {
+      TreeMap h = (TreeMap) objects[i];
+      System.out.print("\n" + h);
+    }
+
+    // (1)
+    System.out.print("\nAggregating the results from the shufflers yields:\n");
+    if (objects.length == 0) return null;
+    TreeMap map1 = (TreeMap) objects[0];
+    for (int i = 1; i < objects.length; i++) {
+      TreeMap map2 = (TreeMap) objects[i];
+      Object[] keys = map2.keySet().toArray();
+      for (int j = 0; j < keys.length; j++) {
+        Object key = keys[j];
+        if (map1.containsKey(key)) {
+          Vector vTmp = joinTwoVectors((Vector) map1.get(key), (Vector) map2.get(key));
+          map1.put(key, vTmp);
+        }
+        else {
+          Vector vTmp = (Vector) map2.get(key);
+          map1.put(key, vTmp);
+        }
+      }
+    }
+    System.out.print(map1);
+    return map1;
+  }
+
+
+  Object[] runReduceActors(TreeMap map) {
+    Object[] keys = map.keySet().toArray();
+    join {
+      for (int i = 0; i < keys.length; i++) {
+        int reduceActorIndex = i%kernel.nReducers();
+        Pair p = new Pair(keys[i], (Vector) map.get(keys[i]));
+        reduceActors[reduceActorIndex]<-reduce(p);
+      }
+    }@theToken(token)@currentContinuation;
+  }
+
+
+  void runOutput(Object[] objects, String outputFilename) {
+    System.out.print("\nAnd the reducers yield the final results:");
+    for (int i = 0; i < objects.length; i++) {
+      Pair p = (Pair) objects[i];
+      System.out.print("\n" + p);
+    }
+
+    System.out.print("\nWriting results to " + outputFilename + "...\n");
+    Vector v = new Vector();
+    for (int i = 0; i < objects.length; i++) {
+      v.add(objects[i]);
+    }
+    output(v, outputFilename);
+  }
+
+
+  // runMapReduce: the function governing the whole map->shuffle->reduce process.
+  void runMapReduce(String inputFilename, String outputFilename) {
+    readInput(inputFilename)@
+    runMapActors(token)@
+    runShuffleActors(token)@aggregateShuffleResults(token)@
+    runReduceActors(token)@
+    runOutput(token, outputFilename);
+  }
+
+  // write a vector of pairs to the output file
+  void output(Vector v, String outputFilename) {
+    PairWriter pw = new PairWriter(outputFilename);
+    for (int i = 0; i < v.size(); ++i) pw.writePair((Pair)v.get(i));
+    pw.close();
+  }
+
+  // sample usage for character counting kernel, change the kernel to word document frequency after implementing the framework
+  void act(String[] args) {
+    int m = Integer.parseInt(args[2]); // number of mappers
+    int s = Integer.parseInt(args[3]); // number of shufflers
+    int r = Integer.parseInt(args[4]); // number of reducers
+
+    String t = args[5];
+    Vector theaters = new Vector();
+    String theater;
+    try {
+      BufferedReader br = new BufferedReader(new FileReader(t));
+      while ((theater = br.readLine()) != null) {
+        theaters.add(theater);
+      }
+      br.close();
+    }
+    catch (IOException ioError){
+      standardError<-println("Unable to read file " + t + "!!!\n");
+    }
+
+    MapReduce wc = new WordCountMapReduce(m, s, r);
+    MapReduceProblemDistributed wordCount = new MapReduceProblemDistributed(wc, theaters);
+    String inputFilename = args[0];
+    String outputFilename = args[1];
+    wordCount <- runMapReduce(inputFilename, outputFilename);
+  }
+}
+
