@@ -1,17 +1,17 @@
 module mapreduce;
 
 import java.util.Vector;
-import java.util.HashMap;
+import java.util.TreeMap;
 
 behavior Shuffle {
     MapReduce kernel;
     int shufflerID;
-    public HashMap dict;
+    public TreeMap dict;
 
     public Shuffle(MapReduce mr, int shufflerID) {
         kernel = mr;
         shufflerID = shufflerID;
-        dict = new HashMap();
+        dict = new TreeMap();
     }
 
     void readPairs(Vector v) {
@@ -30,7 +30,7 @@ behavior Shuffle {
         }
     }
 
-    public HashMap shuffle(Vector v) {
+    public TreeMap shuffle(Vector v) {
         for (int i = 0; i < v.size(); i++) {
             Pair p = (Pair) v.get(i);
             if (dict.containsKey(p.key)) {
