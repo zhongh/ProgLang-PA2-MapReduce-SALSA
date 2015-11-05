@@ -1,0 +1,205 @@
+%% mapreduce.erl
+%% Garrett Chang & Darwin Ding
+%% mapreduce is the main module with most everything really. contains the main start function
+%% and the bodies and such of the map/reduce/shuffle actors.
+
+-module(mapreduce).
+-export([start/8,map_actor/2,shuffle_actor/2,shuffler_actor/4,reduce_actor/2]).
+
+%% recursive function that reads a file line by line, sending each line to the map actors to start the map-reduce framework
+read_lines(Fd,List_of_map_actors,N) ->
+	case file:read_line(Fd) of
+		eof -> %% when done?
+			send_finished(List_of_map_actors,length(List_of_map_actors));
+		{ok,Line} -> %% otherwise continue!
+			R = string:tokens(Line,"\t\n"),
+			%%%io:format("~p~n",[R]),
+			lists:nth((N rem length(List_of_map_actors))+1,List_of_map_actors)!{R,N},
+			read_lines(Fd,List_of_map_actors,N+1) %% increment N to distribute the lines to map_actors evenly
+	end.
+
+%% map/shuffle/reduce actors are all in their own separate lists, this is a helper function that
+%% sends the finished signal generically to any one of the members in any lists
+send_finished(_,0) -> finished;
+send_finished(List,N) ->
+	lists:nth(N,List)!finished,
+	send_finished(List,N-1).
+
+%% inner workings of a map actor, requires custom map function (map_fun)
+map_actor(List_of_shufflers,Map_fun) ->
+	receive
+		{[H|T],N} ->
+			D = Map_fun([H|T]), %% calls custom map function
+			lists:nth(N rem (length(List_of_shufflers)) + 1,List_of_shufflers)!D,
+			map_actor(List_of_shufflers,Map_fun); %% continue till finished
+		finished ->
+			io:format("map actor is finished~n", []),
+			send_finished(List_of_shufflers,length(List_of_shufflers))
+	end.
+
+%% recursive helper function that creates map actors based off of parameter input
+%% uses custom map function, same deal as create_reducer_actors and create_shuffler_actors
+create_map_actors(0,_,_,List_of_map_actors,_,_) -> List_of_map_actors;
+create_map_actors(N,Map_fun,List_of_shufflers,List_of_map_actors,Nodes,Counter) ->
+	M = spawn(lists:nth((Counter rem length(Nodes))+1,Nodes),mapreduce,map_actor,[List_of_shufflers,Map_fun]),
+	create_map_actors(N-1,Map_fun,List_of_shufflers,lists:append(List_of_map_actors,[M]),Nodes,Counter+1).
+
+
+%% inner workings of a simple shuffle actor, shufflers convert (word (d1, 1)) (word (d1, 1)) --> (word (d1, [1,1]))
+shuffle_actor(S, 0) ->
+	io:format("shuffler actor is finished~n",[]),
+	S!finished; %% base case (when there are no more map actors)
+shuffle_actor(S, Number_of_map_actors) ->
+	receive
+		[H|T] ->
+			D = shuffler([H|T]),
+			%%%io:format("~p~n",[D]),
+			S!D,
+			shuffle_actor(S, Number_of_map_actors);
+		finished ->
+			%%%io:format("shuffle actor is finished~n", []),
+			shuffle_actor(S, Number_of_map_actors-1)
+	end.
+
+%% shuffler that sends the shuffled data to the reducers (not reached from regular shuffle actors, only the main one)
+%% see below for a little more explanation
+shuffler_actor(Data,List_of_reducers,N,0)->
+	case N == length(Data) of
+		false ->
+			X = N rem length(List_of_reducers) + 1, %% counter to distrib data evenly
+			lists:nth(X,List_of_reducers)!lists:nth(N+1,Data), %% send to reducer
+			shuffler_actor(Data,List_of_reducers,N+1,0); %% recursive
+		true ->
+			send_finished(List_of_reducers,length(List_of_reducers)) %% finally done shuffling!
+	end;
+
+%% body of the main shuffler actor, which takes in all of the other shuffler inputs and eventually merges them
+%% then converts in to the definition above, which sends the data out to the reducers
+shuffler_actor(Data,List_of_reducers,N,Number_of_shuffle_actors) ->
+	receive
+		[H|T] ->
+			%%%io:format("~p\t~p~n",[[H|T],Number_of_shuffle_actors]),
+			shuffler_actor(lists:append(Data,[H|T]),List_of_reducers,N,Number_of_shuffle_actors);
+		finished ->
+			case Number_of_shuffle_actors-1 == 0 of
+				true ->
+					D1 = lists:flatten(Data),
+					D = shuffle_combiner(D1), %% helper function for merging shuffled data
+					%%%io:format("~p~n",[D]),
+					shuffler_actor(D,List_of_reducers,N,0);
+				false ->
+					shuffler_actor(Data,List_of_reducers,N,Number_of_shuffle_actors-1)
+			end
+	end.
+
+%% recursive helper function that creates shuffler actors based off of parameter input
+create_shuffler_actors(0,List_of_shuffle_actors,_,_,_,_) -> List_of_shuffle_actors; %% base case
+create_shuffler_actors(N,List_of_shuffle_actors,S,Nodes,Counter,Number_of_map_actors) -> %% recursive case, Counter mod len(Nodes) is the node to be spawning on
+	M = spawn(lists:nth((Counter rem length(Nodes))+1,Nodes),mapreduce,shuffle_actor,[S, Number_of_map_actors]), %% N is the number of shuffler_actors to spawn
+	create_shuffler_actors(N-1,lists:append(List_of_shuffle_actors,[M]),S,Nodes,Counter+1, Number_of_map_actors). %% increment counter, decr N, continue
+
+%% inner workings of a typical reduce actor, which take in tuples of {word, {File, [number of occurances in a list of 1's]}} and print to file
+reduce_actor(Fd,Reduce_fun) ->
+	receive
+		{Word,Value} ->
+			D = Reduce_fun({Word,Value}), %% uses custom reduce function from map_reduce_fun
+			Middle = print(D,""),
+			Output = Word ++ Middle,
+			io:format("~s~n",[Output]),
+			file:write(Fd, io_lib:fwrite("~s~n",[Output])), %% write to file
+			reduce_actor(Fd,Reduce_fun); %% recursive, reduce_actors keep going
+		finished ->
+			finished
+	end.
+
+%% recursive helper function that creates reducer actors based off of parameter input
+%% basically same deal as the shuffler actors, uses a custom counter to know what node to create the actor on
+%% also has a running tally of how many more reducers to be spawning (hence the recursion)
+create_reducer_actors(0,List_of_reducers,_,_,_,_) -> List_of_reducers;
+create_reducer_actors(N,List_of_reducers,Fd,Reduce_fun,Nodes,Counter) ->
+	M = spawn(lists:nth((Counter rem length(Nodes))+1,Nodes),mapreduce,reduce_actor,[Fd,Reduce_fun]),
+	%%%io:format("~p~n",[M]),
+	create_reducer_actors(N-1,lists:append(List_of_reducers,[M]),Fd,Reduce_fun,Nodes,Counter+1).
+
+%% recursive helper function that performs a shuffle
+%% in essence: {word, [{d1, [1]}]} {word, [{d1, [1]}]} --> shuffler --> {word, [{d1, [1,1]}]} where the word is the same
+shuffle([],List) -> List; %% done
+shuffle([H|T],[]) -> shuffle(T,[H]); %% first case, simply move an element
+shuffle([H|T],List) -> %% complicated case, have to check tuples for duplicate first element
+	Word1 = element(1,H),
+	Tuple1 = lists:last(List),
+	Word2 = element(1,Tuple1), %% extract first element from list
+	case Word1 == Word2 of %% if they're the same, merge their lists
+		true ->
+			Element2 = element(1,lists:nth(1,element(2,Tuple1))),
+			Element3 = lists:append(element(2,lists:nth(1,element(2,Tuple1))),[1]),
+			New_tuple = {element(1,Tuple1),[{Element2,Element3}]},
+			shuffle(T,lists:keyreplace(Word1,1,List,New_tuple));
+		false -> %% otherwise, just append and continue
+			shuffle(T,lists:append(List,[H]))
+	end.
+
+%% this is the function that is actually called, sorts the data before shuffling (see shuffle actor)
+shuffler(Data) ->
+	D = lists:keysort(1,Data),
+	shuffle(D,[]).
+
+%% secondary shuffle function, used mainly for merging already shuffled data
+%% (used by main shuffle actor, which collects/merges data from other shuffle actors before reduction)
+%% this is called by shuffle_combiner, which is called by the main shuffle actor
+shuffle2([],List) -> List;
+shuffle2([H|T],[]) -> shuffle2(T,[H]);
+shuffle2([H|T],List) ->
+	Word1 = element(1,H),
+	Tuple1 = lists:last(List),
+	Word2 = element(1,Tuple1),
+	case Word1 == Word2 of
+		true ->
+			Element = lists:append(element(2,Tuple1),element(2,H)),
+			New_tuple = {element(1,Tuple1),Element},
+			shuffle2(T,lists:keyreplace(Word1,1,List,New_tuple));
+		false ->
+			shuffle2(T,lists:append(List,[H]))
+	end.
+
+%% sorts data before merging
+shuffle_combiner(Data) ->
+	D = lists:keysort(1,Data),
+	shuffle2(D,[]).
+
+%% print is a recursive helper function that formats and prints the counts of each of the words
+print([],Str) -> Str; %% base case
+print([H|T],Str) -> %% recursive case
+	%%file:write(Fd, io_lib:fwrite("\t(~s,~p)",[element(1,H),element(2,H)])),
+	%%io:format("\t(~s,~p)",[element(1,H),element(2,H)]),
+	Add = io_lib:format("\t(~s,~p)",[element(1,H),element(2,H)]),
+	print(T,Str++Add).
+
+%% connect_to_nodes is a simple recursive function that connects to all the nodes in a list
+connect_to_nodes([]) -> finished; %% base case
+connect_to_nodes([H|T]) -> %% recursive case
+	net_kernel:connect_node(H),
+	connect_to_nodes(T).
+
+%% start is the main function that everything starts from
+%% note all the counters are used to make sure things are distributed between counters and nodes evenly
+start(Input_file,Output_file,Map_fun,Reduce_fun,Num_map,Num_shuf,Num_red,Nodes) ->
+	connect_to_nodes(Nodes), %% begin distributed programming
+	{ok,Fd} = file:open(Output_file, [write]), %% open output file for writing at end
+	Counter = 0,
+	L_r = create_reducer_actors(Num_red,[],Fd,Reduce_fun,Nodes,Counter), %% creates reducer actors
+	Counter2 = Counter + Num_red,
+	S = spawn(lists:nth((Counter2 rem length(Nodes))+1,Nodes),mapreduce,shuffler_actor,[[],L_r,0,Num_shuf]), %% creates main shuffler (see above)
+	Counter3 = Counter2 + 1,
+	L_s = create_shuffler_actors(Num_shuf,[],S,Nodes,Counter3,Num_map), %% creates shuffler actors
+	Counter4 = Counter3 + Num_shuf,
+	L_m = create_map_actors(Num_map,Map_fun,L_s,[],Nodes,Counter4), %% creates map actors
+	{ok,Fd2} = file:open(Input_file, [read,raw]), %% after all actors are spawned start reading!
+	read_lines(Fd2,L_m,0), %% read file, this will send to map actors.
+	file:close(Fd2). %% finally, finished.
+
+
+
+
+
+

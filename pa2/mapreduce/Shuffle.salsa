@@ -1,0 +1,49 @@
+module mapreduce;
+
+import java.util.Vector;
+import java.util.HashMap;
+
+behavior Shuffle {
+    MapReduce kernel;
+    int shufflerID;
+    public HashMap dict;
+
+    public Shuffle(MapReduce mr, int shufflerID) {
+        kernel = mr;
+        shufflerID = shufflerID;
+        dict = new HashMap();
+    }
+
+    void readPairs(Vector v) {
+        for (int i = 0; i < v.size(); i++) {
+            Pair p = (Pair) v.get(i);
+            if (dict.containsKey(p.key)) {
+                Vector vTmp = (Vector) dict.get(p.key);
+                vTmp.add(p.value);
+                dict.put(p.key, vTmp);
+            }
+            else {
+                Vector vTmp = new Vector();
+                vTmp.add(p.value);
+                dict.put(p.key, vTmp);
+            }
+        }
+    }
+
+    public HashMap shuffle(Vector v) {
+        for (int i = 0; i < v.size(); i++) {
+            Pair p = (Pair) v.get(i);
+            if (dict.containsKey(p.key)) {
+                Vector vTmp = (Vector) dict.get(p.key);
+                vTmp.add(p.value);
+                dict.put(p.key, vTmp);
+            }
+            else {
+                Vector vTmp = new Vector();
+                vTmp.add(p.value);
+                dict.put(p.key, vTmp);
+            }
+        }
+        return dict;
+    }
+}
