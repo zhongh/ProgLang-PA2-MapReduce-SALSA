@@ -1,23 +1,32 @@
-exampleInput.txt and exampleOutput.txt are input and output files for the character counting problem.
+## Distributed Map-Reduce Framework for Word Count
 
-cshrc.txt are commands to be added to the .cshrc file for Unix.
+### How to compile
 
-theaters.txt is a sample name server and theaters description file.
+1. Make sure the following items are in your current working directory:
+  * the source code folder `mapreduce\`;
+  * text file listing the naming server and theaters to be used, e.g. `theaters.txt`;
+  * the input file, e.g. `exampleInput.txt`;
+  * \*SALSA distribution, e.g. `salsa1.1.5.jar`. (This is optional since you can always identify your SALSA distribution location on your machine.)
 
-In the mapreduce directory:
-MapReduce.java is the interface for specifying Map-Reduce problems.
-CharCountMapReduce.java is a sample specification of a Map-Reduce problem.
-MapReduceProblem.salsa, Map.salsa and Reduce.salsa show how to use a problem specification.
+2. Start the naming server and all the theaters which need to be used.
+  * `java -cp salsa1.1.5.jar:. wwc.naming.WWCNamingServer`
+  * `java -cp salsa1.1.5.jar:. wwc.messaging.Theater 4040`
+  * `java -cp salsa1.1.5.jar:. wwc.messaging.Theater 4041`
+  * `java -cp salsa1.1.5.jar:. wwc.messaging.Theater 4042`
+  * ... 
 
-Pair.java, PairReader.java and PairWriter.java are I/O utilities compatible with the Map-Reduce I/O specifications.
+3. Compile `.salsa` files to Java source files:
+    `java -cp salsa1.1.5.jar:. salsac.SalsaCompiler mapreduce/*.salsa`
 
-You need to write a Shuffle behavior and complete the runMapReduce message handler of the MapReduceProblem behavior.
+4. Compile Java:
+    `javac -classpath salsa1.1.5.jar:. mapreduce/*.java`
 
-After implementing the Map-Reduce framework, the concurrent program should be able to run with the following commands:
-salsac mapreduce/*
-salsa mapreduce.MapReduceProblem exampleInput.txt exampleOutput.txt 3 3 3
+5. Execute:
+    `java -cp salsa1.1.5.jar:. mapreduce.MapReduceProblemDistributed [input file name] [output file name] [# of map actors] [# of shuffle actors] [# of reduce actors] [theaters info file]` 
 
-And the distributed program should be able to run with the following commands:
-salsac mapreduce/*
-salsa mapreduce.MapReduceProblem exampleInput.txt exampleOutput.txt 3 3 3 theaters.txt
+(For more details in compiling please refer to [http://www.cs.rpi.edu/research/groups/wwc/salsa/tutorial/salsa112v.pdf].)
 
+### Features
+
+This submission successfully implements a distributed map-reduce framework for word count, as required by this assignment. Commom bugs have been purged by completion and the code works nicely in different setting.
+  
