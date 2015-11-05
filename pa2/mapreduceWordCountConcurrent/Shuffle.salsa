@@ -1,0 +1,49 @@
+module mapreduce;
+
+import java.util.Vector;
+import java.util.TreeMap;
+
+behavior Shuffle {
+    MapReduce kernel;
+    int shufflerID;
+    public TreeMap dict;
+
+    public Shuffle(MapReduce mr, int shufflerID) {
+        kernel = mr;
+        shufflerID = shufflerID;
+        dict = new TreeMap();
+    }
+
+    void readPairs(Vector v) {
+        for (int i = 0; i < v.size(); i++) {
+            Pair p = (Pair) v.get(i);
+            if (dict.containsKey(p.key)) {
+                Vector vTmp = (Vector) dict.get(p.key);
+                vTmp.add(p.value);
+                dict.put(p.key, vTmp);
+            }
+            else {
+                Vector vTmp = new Vector();
+                vTmp.add(p.value);
+                dict.put(p.key, vTmp);
+            }
+        }
+    }
+
+    public TreeMap shuffle(Vector v) {
+        for (int i = 0; i < v.size(); i++) {
+            Pair p = (Pair) v.get(i);
+            if (dict.containsKey(p.key)) {
+                Vector vTmp = (Vector) dict.get(p.key);
+                vTmp.add(p.value);
+                dict.put(p.key, vTmp);
+            }
+            else {
+                Vector vTmp = new Vector();
+                vTmp.add(p.value);
+                dict.put(p.key, vTmp);
+            }
+        }
+        return dict;
+    }
+}
